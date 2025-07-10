@@ -1,0 +1,22 @@
+package:
+  name: symlinks-in-workspace-build
+  description: Test that symlinks are copied into workspaces
+  version: 0.1.0
+  epoch: 0
+
+environment:
+  contents:
+    packages:
+      - busybox
+
+pipeline:
+  - name: Test for symlink presence in workspace
+    runs: |
+      set -x
+      # Broken symlinks are copied correctly
+      broken_link=$(readlink broken-symlink)
+      [ "$broken_link" = "./does-not-exist" ]
+      # Working symlinks are copied correctly and point at the right target
+      testdata_link=$(readlink testdata-symlink.txt)
+      [ "$testdata_link" = "testdata.txt" ]
+      [ "$(cat testdata-symlink.txt)" = "$(cat testdata.txt)" ]
