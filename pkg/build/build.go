@@ -428,6 +428,23 @@ func copyFile(base, src, dest string, perm fs.FileMode) error {
 	return nil
 }
 
+func copySymlink(base, src, dest string) error {
+	basePath := filepath.Join(base, src)
+	destPath := filepath.Join(dest, src)
+	destDir := filepath.Dir(destPath)
+
+	target, err := os.Readlink(basePath)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir -p %s: %w", destDir, err)
+	}
+
+	return os.Symlink(target, destPath)
+}
+
 // applyBuildOption applies a patch described by a BuildOption to a package build.
 func (b *Build) applyBuildOption(bo config.BuildOption) error {
 	// Patch the variables block.
@@ -556,26 +573,28 @@ func (b *Build) populateWorkspace(ctx context.Context, src fs.FS) error {
 			return err
 		}
 
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-
-		mode := fi.Mode()
-		if !mode.IsRegular() {
+		if path == "." {
 			return nil
 		}
-
 		for _, pat := range ignorePatterns {
 			if pat.Match(path) {
 				return nil
 			}
 		}
 
-		log.Debugf("  -> %s", path)
-
-		if err := copyFile(b.SourceDir, path, b.WorkspaceDir, mode.Perm()); err != nil {
+		fi, err := d.Info()
+		if err != nil {
 			return err
+		}
+		mode := fi.Mode()
+
+		switch {
+		case mode.IsRegular():
+			log.Debugf("  -> %s", path)
+			return copyFile(b.SourceDir, path, b.WorkspaceDir, mode.Perm())
+		case mode&fs.ModeSymlink != 0:
+			log.Debugf("  -> %s", path)
+			return copySymlink(b.SourceDir, path, b.WorkspaceDir)
 		}
 
 		return nil
