@@ -99,6 +99,7 @@ func (bw *qemu) Run(ctx context.Context, cfg *Config, envOverride map[string]str
 		envOverride,
 		stderr,
 		stdout,
+		nil,
 		args,
 	)
 	if err != nil {
@@ -127,6 +128,7 @@ func (bw *qemu) Debug(ctx context.Context, cfg *Config, envOverride map[string]s
 		err := sendSSHCommand(ctx,
 			cfg.WorkspaceClient,
 			cfg,
+			nil,
 			nil,
 			nil,
 			nil,
@@ -390,6 +392,7 @@ func (bw *qemu) TerminatePod(ctx context.Context, cfg *Config) error {
 		nil,
 		nil,
 		nil,
+		nil,
 		[]string{"sh", "-c", "echo s > /proc/sysrq-trigger && echo o > /proc/sysrq-trigger&"},
 	)
 	if err != nil {
@@ -459,6 +462,7 @@ func (bw *qemu) WorkspaceTar(ctx context.Context, cfg *Config, extraFiles []stri
 		cfg,
 		nil,
 		stderr,
+		nil,
 		outFile,
 		[]string{"sh", "-c", retrieveCommand},
 	)
@@ -492,6 +496,7 @@ func (bw *qemu) GetReleaseData(ctx context.Context, cfg *Config) (*apko_build.Re
 		nil,
 		nil,
 		bufWriter,
+		nil,
 		[]string{"sh", "-c", "cat /etc/os-release"},
 	)
 
@@ -859,6 +864,7 @@ func createMicroVM(ctx context.Context, cfg *Config) error {
 				nil,
 				stderr,
 				stdout,
+				nil,
 				[]string{"sh", "-c", setupMountCommand},
 			)
 			if err != nil {
@@ -877,6 +883,7 @@ func createMicroVM(ctx context.Context, cfg *Config) error {
 		nil,
 		stderr,
 		stdout,
+		nil,
 		[]string{"sh", "-c", "find /mnt/ -mindepth 1 -maxdepth 1 -exec cp -a {} /home/build/ \\;"},
 	)
 	if err != nil {
@@ -946,6 +953,7 @@ func getWorkspaceLicenseFiles(ctx context.Context, cfg *Config, extraFiles []str
 		nil,
 		nil,
 		bufWriter,
+		nil,
 		[]string{"sh", "-c", "cd /mount/home/build && find . -type f -links 1 -print"},
 	)
 	if err != nil {
@@ -1180,7 +1188,7 @@ func getHostKey(ctx context.Context, cfg *Config) error {
 
 func sendSSHCommand(ctx context.Context, client *ssh.Client,
 	cfg *Config, extraVars map[string]string,
-	stderr, stdout io.Writer,
+	stderr, stdout io.Writer, stdin io.Reader,
 	command []string,
 ) error {
 	// Create a session
@@ -1230,6 +1238,7 @@ func sendSSHCommand(ctx context.Context, client *ssh.Client,
 
 	session.Stderr = stderr
 	session.Stdout = stdout
+	session.Stdin = stdin
 
 	clog.FromContext(ctx).Debugf("running (%d) %v", len(command), cmd)
 	err = session.Run(cmd)
