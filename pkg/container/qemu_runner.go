@@ -444,10 +444,6 @@ func (bw *qemu) WorkspaceTar(ctx context.Context, cfg *Config, extraFiles []stri
 	// work around missing scp (needs openssh-sftp package), we just tar the file
 	// and pipe the output to our local file. It is potentially slower, but being
 	// a localhost interface, the performance penalty should be negligible.
-	//
-	// We could just cp -a to /mnt as it is our shared workspace directory, but
-	// this will lose some file metadata like hardlinks, owners and so on.
-	// Example of package that won't work when using "cp -a" is glibc.
 	retrieveCommand := "cd /mount/home/build && find melange-out -type p -delete > /dev/null 2>&1 || true && tar cvpf - --xattrs --acls melange-out"
 	// we append also all the necessary files that we might need, for example Licenses
 	// for license checks
@@ -877,14 +873,24 @@ func createMicroVM(ctx context.Context, cfg *Config) error {
 	}
 
 	clog.FromContext(ctx).Info("qemu: setting up local workspace")
+
+	buf := new(bytes.Buffer)
+	workspaceWriter := tar.NewWriter(buf)
+	if err := workspaceWriter.AddFS(os.DirFS(cfg.WorkspaceDir)); err != nil {
+		return err
+	}
+	if err := workspaceWriter.Close(); err != nil {
+		return err
+	}
+
 	err = sendSSHCommand(ctx,
 		cfg.SSHClient,
 		cfg,
 		nil,
 		stderr,
 		stdout,
-		nil,
-		[]string{"sh", "-c", "find /mnt/ -mindepth 1 -maxdepth 1 -exec cp -a {} /home/build/ \\;"},
+		buf,
+		[]string{"sh", "-c", "mkdir -p /home/build && cd /home/build && tar xf -"},
 	)
 	if err != nil {
 		err = qemuCmd.Process.Kill()
