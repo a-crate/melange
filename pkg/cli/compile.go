@@ -67,6 +67,7 @@ func compile() *cobra.Command {
 	var configFileGitRepoURL string
 	var configFileLicense string
 	var generateProvenance bool
+	var lock bool
 
 	cmd := &cobra.Command{
 		Use:     "compile",
@@ -139,6 +140,7 @@ func compile() *cobra.Command {
 				build.WithConfigFileRepositoryURL(configFileGitRepoURL),
 				build.WithConfigFileLicense(configFileLicense),
 				build.WithGenerateProvenance(generateProvenance),
+				build.WithLock(lock),
 			}
 
 			if len(args) > 0 {
@@ -205,6 +207,7 @@ func compile() *cobra.Command {
 	cmd.Flags().StringVar(&memory, "memory", "", "default memory resources to use for builds")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "default timeout for builds")
 	cmd.Flags().BoolVar(&generateProvenance, "generate-provenance", false, "generate SLSA provenance for builds (included in a separate .attest.tar.gz file next to the APK)")
+	cmd.Flags().BoolVar(&lock, "lock", false, "resolve the packages of the build environment to the exact versions available in its repositories")
 
 	cmd.Flags().StringVar(&configFileGitCommit, "git-commit", "", "commit hash of the git repository containing the build config file (defaults to detecting HEAD)")
 	cmd.Flags().StringVar(&configFileGitRepoURL, "git-repo-url", "", "URL of the git repository containing the build config file (defaults to detecting from configured git remotes)")
@@ -226,6 +229,14 @@ func CompileCmd(ctx context.Context, opts ...build.Option) error {
 
 	if err := bc.Compile(ctx); err != nil {
 		return fmt.Errorf("failed to compile %s: %w", bc.ConfigFile, err)
+	}
+
+	// Locking has to happen after compilation, because compiling the pipelines is
+	// what adds their `needs` packages to the build environment.
+	if bc.Lock {
+		if err := bc.LockEnvironment(ctx); err != nil {
+			return fmt.Errorf("failed to lock build environment for %s: %w", bc.ConfigFile, err)
+		}
 	}
 
 	return json.NewEncoder(os.Stdout).Encode(bc.Configuration)

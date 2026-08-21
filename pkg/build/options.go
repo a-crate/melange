@@ -430,6 +430,15 @@ func WithIgnoreSignatures(ignore bool) Option {
 	}
 }
 
+// WithLock sets whether the compiled configuration has its build environment
+// packages resolved to exact versions.
+func WithLock(lock bool) Option {
+	return func(b *Build) error {
+		b.Lock = lock
+		return nil
+	}
+}
+
 // WithGenerateProvenance sets whether to generate SLSA provenance during the build.
 func WithGenerateProvenance(provenance bool) Option {
 	return func(b *Build) error {

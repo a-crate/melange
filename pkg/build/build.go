@@ -137,6 +137,11 @@ type Build struct {
 	Auth                  map[string]options.Auth
 	IgnoreSignatures      bool
 
+	// Lock resolves the build environment packages to exact versions when
+	// compiling the configuration. A build always locks its environment, so this
+	// only affects what melange compile emits.
+	Lock bool
+
 	EnabledBuildOptions []string
 
 	// SBOMGenerator is the generator used to create SBOMs for this build.
@@ -296,6 +301,79 @@ func (b *Build) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// apkoOptions returns the apko options used to lock and build the guest
+// environment described by imgConfig, using tmp as apko's temporary directory.
+func (b *Build) apkoOptions(imgConfig apko_types.ImageConfiguration, tmp string) []apko_build.Option {
+	return []apko_build.Option{
+		apko_build.WithImageConfiguration(imgConfig),
+		apko_build.WithArch(b.Arch),
+		apko_build.WithExtraKeys(b.ExtraKeys),
+		apko_build.WithExtraBuildRepos(b.ExtraRepos),
+		apko_build.WithExtraPackages(b.ExtraPackages),
+		apko_build.WithCache(b.ApkCacheDir, false, apk.NewCache(true)),
+		apko_build.WithTempDir(tmp),
+		apko_build.WithIgnoreSignatures(b.IgnoreSignatures),
+	}
+}
+
+// lockEnvironment resolves imgConfig's package list to the exact versions
+// available in its repositories, so that the environment may be reproduced
+// exactly. Callers are responsible for setting imgConfig.Archs.
+func lockEnvironment(ctx context.Context, imgConfig apko_types.ImageConfiguration, opts []apko_build.Option) (*apko_types.ImageConfiguration, error) {
+	log := clog.FromContext(ctx)
+
+	configs, warn, err := apko_build.LockImageConfiguration(ctx, imgConfig, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("unable to lock image configuration: %w", err)
+	}
+
+	for k, v := range warn {
+		log.Warnf("Unable to lock package %s: %s", k, v)
+	}
+
+	locked, ok := configs["index"]
+	if !ok {
+		return nil, errors.New("missing locked config")
+	}
+
+	return locked, nil
+}
+
+// LockEnvironment resolves the packages of the build environment to the exact
+// versions available in its repositories, overwriting Configuration.Environment
+// with the locked result.
+//
+// Unlike buildGuest, this does not construct the guest image, so it does not
+// need a runner.
+func (b *Build) LockEnvironment(ctx context.Context) error {
+	ctx, span := otel.Tracer("melange").Start(ctx, "LockEnvironment")
+	defer span.End()
+
+	tmp, err := os.MkdirTemp(os.TempDir(), "apko-temp-*")
+	if err != nil {
+		return fmt.Errorf("creating apko tempdir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	imgConfig := b.Configuration.Environment
+
+	// Work around LockImageConfiguration assuming multi-arch.
+	imgConfig.Archs = []apko_types.Architecture{b.Arch}
+
+	locked, err := lockEnvironment(ctx, imgConfig, b.apkoOptions(imgConfig, tmp))
+	if err != nil {
+		return err
+	}
+
+	// Locking is only meant to pin the package list, so keep the architectures
+	// the configuration was written with rather than the one we locked for.
+	locked.Archs = b.Configuration.Environment.Archs
+
+	b.Configuration.Environment = *locked
+
+	return nil
+}
+
 // buildGuest invokes apko to build the guest environment, returning a reference to the image
 // loaded by the OCI Image loader.
 //
@@ -315,30 +393,11 @@ func (b *Build) buildGuest(ctx context.Context, imgConfig apko_types.ImageConfig
 	// Work around LockImageConfiguration assuming multi-arch.
 	imgConfig.Archs = []apko_types.Architecture{b.Arch}
 
-	opts := make([]apko_build.Option, 0, 9)
-	opts = append(opts,
-		apko_build.WithImageConfiguration(imgConfig),
-		apko_build.WithArch(b.Arch),
-		apko_build.WithExtraKeys(b.ExtraKeys),
-		apko_build.WithExtraBuildRepos(b.ExtraRepos),
-		apko_build.WithExtraPackages(b.ExtraPackages),
-		apko_build.WithCache(b.ApkCacheDir, false, apk.NewCache(true)),
-		apko_build.WithTempDir(tmp),
-		apko_build.WithIgnoreSignatures(b.IgnoreSignatures),
-	)
+	opts := b.apkoOptions(imgConfig, tmp)
 
-	configs, warn, err := apko_build.LockImageConfiguration(ctx, imgConfig, opts...)
+	locked, err := lockEnvironment(ctx, imgConfig, opts)
 	if err != nil {
-		return "", fmt.Errorf("unable to lock image configuration: %w", err)
-	}
-
-	for k, v := range warn {
-		log.Warnf("Unable to lock package %s: %s", k, v)
-	}
-
-	locked, ok := configs["index"]
-	if !ok {
-		return "", errors.New("missing locked config")
+		return "", err
 	}
 
 	// Overwrite the environment with the locked one.
